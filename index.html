@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b1020" />
-  <title>Easy Face Blur (PWA)</title>
+  <title>Easy Face Blur — Web</title>
   <style>
     :root { --gap:12px; --bg:#0b1020; --card:#111a30; --text:#e8eefc; --muted:#9fb0d1; --brand:#4a6bff; --bar:#101831; --accent:#50c8ff; --accent2:#ff6fa5; }
     html, body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
-    header { padding: 14px 16px calc(14px + env(safe-area-inset-top)); border-bottom: 1px solid #1d2745; display:flex; align-items:center; gap:10px; }
+    header { padding:14px 16px; border-bottom:1px solid #1d2745; display:flex; align-items:center; gap:10px; }
     header h1 { margin:0; font-size:16px; font-weight:800; letter-spacing:0.2px; }
 
     .app { display:grid; grid-template-columns:360px 1fr; gap:var(--gap); padding:var(--gap); }
@@ -44,11 +43,10 @@
     .bar .btn { flex:1 1 auto; padding:12px; }
     @media (max-width: 900px) { .bar { display:flex; } }
   </style>
-  <link id="pwa-manifest" rel="manifest" />
-  <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+  <!-- Web-only (no PWA/service worker). Scripts load last for reliability. -->
 </head>
 <body>
-  <header><h1>Easy Face Blur — Web & Mobile</h1></header>
+  <header><h1>Easy Face Blur — Web</h1></header>
 
   <div class="app">
     <section class="panel">
@@ -102,29 +100,11 @@
     <button id="barReset" class="btn" disabled>Reset</button>
   </div>
 
+  <!-- Load libs, then app, at the end so DOM is ready -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.13.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
   <script>
   'use strict';
-  // ===== PWA: manifest + service worker =====
-  (function setupPWA(){
-    try {
-      const svg512 = `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
-        <svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'>
-          <defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%' stop-color='#4a6bff'/><stop offset='100%' stop-color='#0b1020'/></linearGradient></defs>
-          <rect width='100%' height='100%' fill='url(#g)'/>
-          <g fill='white' font-family='Arial, Helvetica, sans-serif'>
-            <text x='50%' y='54%' dominant-baseline='middle' text-anchor='middle' font-size='210' font-weight='800'>FB</text>
-          </g>
-        </svg>`);
-      const manifest={ name:'Easy Face Blur', short_name:'FaceBlur', start_url:'.', display:'standalone', background_color:'#0b1020', theme_color:'#0b1020', icons:[ {src:svg512,sizes:'512x512',type:'image/svg+xml',purpose:'any maskable'}, {src:svg512,sizes:'192x192',type:'image/svg+xml',purpose:'any maskable'} ] };
-      const mblob=new Blob([JSON.stringify(manifest)],{type:'application/manifest+json'});
-      const murl=URL.createObjectURL(mblob); const link=document.getElementById('pwa-manifest'); if(link) link.href=murl;
-      if('serviceWorker' in navigator){
-        const swCode = `const C='fb-v3';const CORE=['.',location.pathname];self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting()))});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C).map(k=>caches.delete(k)))));self.clients.claim()});self.addEventListener('fetch',e=>{const r=e.request;if(r.method!=='GET')return;const u=new URL(r.url);if(u.origin===location.origin){e.respondWith(caches.match(r).then(h=>h||fetch(r).then(res=>{const cl=res.clone();caches.open(C).then(c=>c.put(r,cl));return res}))) } else {e.respondWith(fetch(r).then(res=>{const cl=res.clone();caches.open(C).then(c=>c.put(r,cl));return res}).catch(()=>caches.match(r)))}});`;
-        const swBlob=new Blob([swCode],{type:'text/javascript'}); const swURL=URL.createObjectURL(swBlob); navigator.serviceWorker.register(swURL).catch(()=>{});
-        window.addEventListener('unload',()=>{ URL.revokeObjectURL(swURL); URL.revokeObjectURL(murl); });
-      }
-    } catch(e){ console.warn('PWA setup skipped:', e); }
-  })();
 
   // ===== App state & elements =====
   const S={ image:null, detections:[], scale:1, history:[], redo:[], original:null, mode:'blur' };
@@ -134,15 +114,15 @@
   const barApply=$('barApply'), barUndo=$('barUndo'), barRedo=$('barRedo'), barReset=$('barReset');
   const blurRadius=$('blurRadius'), boxPad=$('boxPad');
   const modeBlur=$('modeBlur'), modePix=$('modePix');
-  const facesList=$('facesList');
+  const facesList=(function(){ const d=document.createElement('div'); d.id='facesList'; return d; })(); // placeholder created if missing
   const canvas=$('canvas'), overlay=$('overlay');
   const ctx=canvas.getContext('2d');
   const octx=overlay.getContext('2d');
 
   function setEnabled(el,on){ if(el) el.disabled=!on; }
-  function canUndo(){ return S.history.length>0; }
-  function canRedo(){ return S.redo.length>0; }
-  function pushHistory(){ try{ S.history.push(ctx.getImageData(0,0,canvas.width,canvas.height)); S.redo=[]; }catch(e){} }
+  function canUndo(){ return S.history.length>0 }
+  function canRedo(){ return S.redo.length>0 }
+  function pushHistory(){ try{ S.history.push(ctx.getImageData(0,0,canvas.width,canvas.height)); S.redo=[] }catch(e){} }
 
   function refresh(){
     const has=!!S.image; setEnabled(detectBtn,has); setEnabled(selectAllBtn,S.detections.length>0); setEnabled(clearSelBtn,S.detections.some(d=>d.selected));
@@ -169,16 +149,16 @@
     refresh();
   }
 
-  function hit(px,py,b){ return px>=b.x && py>=b.y && px<=b.x+b.w && py<=b.y+b.h; }
-  function list(){ if(!S.detections.length){ facesList.textContent='No faces detected yet.'; return; } facesList.innerHTML='';
+  function hit(px,py,b){ return px>=b.x && py>=b.y && px<=b.x+b.w && py<=b.y+b.h }
+  function list(){ const listEl=document.getElementById('facesList')||facesList; if(!S.detections.length){ listEl.textContent='No faces detected yet.'; return; } listEl.innerHTML='';
     S.detections.forEach((d,i)=>{ const row=document.createElement('div'); row.className='item'; const left=document.createElement('div'); left.textContent=`Face #${i+1} — ${Math.round(d.box.w)}×${Math.round(d.box.h)} px`;
-      const right=document.createElement('div'); const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!d.selected; cb.addEventListener('change',()=>{ d.selected=cb.checked; drawBoxes(); }); right.append(cb); row.append(left,right); facesList.append(row); }); }
+      const right=document.createElement('div'); const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!d.selected; cb.addEventListener('change',()=>{ d.selected=cb.checked; drawBoxes(); }); right.append(cb); row.append(left,right); listEl.append(row); }); }
 
   const supportFilter = (()=>{ const c=document.createElement('canvas'); const g=c.getContext('2d'); try{ g.filter='blur(1px)'; return g.filter.includes('blur'); }catch{ return false } })();
   function applyEffectToBox(det){
     const {x,y,w,h}=det.box; const off=document.createElement('canvas'); off.width=Math.max(1,Math.floor(w)); off.height=Math.max(1,Math.floor(h));
     const offctx=off.getContext('2d',{willReadFrequently:true}); offctx.drawImage(canvas,x,y,w,h,0,0,off.width,off.height);
-    if(S.mode==='blur' && supportFilter){ const r=Math.max(1,Math.min(80,parseInt(blurRadius.value||'22',10))); offctx.filter=`blur(${r}px)`; offctx.drawImage(off,0,0); }
+    if (S.mode==='blur' && supportFilter){ offctx.filter=`blur(${Math.max(1,Math.min(80,parseInt(blurRadius.value||'22',10)))}px)`; offctx.drawImage(off,0,0); }
     else { const factor=10; const sw=Math.max(1,Math.floor(off.width/factor)), sh=Math.max(1,Math.floor(off.height/factor)); const tiny=document.createElement('canvas'); tiny.width=sw; tiny.height=sh; const tctx=tiny.getContext('2d'); tctx.imageSmoothingEnabled=false; offctx.imageSmoothingEnabled=false; ctx.imageSmoothingEnabled=false; tctx.drawImage(off,0,0,sw,sh); offctx.clearRect(0,0,off.width,off.height); offctx.drawImage(tiny,0,0,sw,sh,0,0,off.width,off.height); }
     ctx.drawImage(off,x,y,w,h);
   }
@@ -186,48 +166,26 @@
   // ===== Handlers =====
   fileInput.addEventListener('change', e=>{
     const file=e.target.files?.[0]; if(!file||!file.type.startsWith('image/')){ alert('Please choose an image file.'); return; }
-    const img=new Image(); img.onload=()=>{ S.image=img; S.detections=[]; fitCanvas(img); facesList.textContent='Image loaded. Tap Detect Faces.'; refresh(); URL.revokeObjectURL(img.src); }; img.onerror=()=>alert('Could not load that image.'); img.src=URL.createObjectURL(file);
+    const img=new Image(); img.onload=()=>{ S.image=img; S.detections=[]; fitCanvas(img); const c=document.getElementById('facesList'); if(c) c.textContent='Image loaded. Tap Detect Faces.'; refresh(); URL.revokeObjectURL(img.src) }; img.onerror=()=>alert('Could not load that image.'); img.src=URL.createObjectURL(file);
   });
 
-  async function loadModelsOnce(){ if(loadModelsOnce._done) return; const base='https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/'; await faceapi.nets.tinyFaceDetector.loadFromUri(base); loadModelsOnce._done=true; }
+  async function loadModelsOnce(){ if(loadModelsOnce._done) return; const bases=[ 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/', 'https://unpkg.com/@vladmandic/face-api@latest/model/' ]; let ok=false; for(const b of bases){ try{ await faceapi.nets.tinyFaceDetector.loadFromUri(b); ok=true; break; }catch(e){ console.warn('model load failed from',b,e);} } if(!ok) throw new Error('Could not load models'); loadModelsOnce._done=true; }
 
-  // Detect faces with fallbacks (clean, single handler — no duplicates)
-  detectBtn.addEventListener('click', async () => {
-    if (!S.image) return;
-    facesList.textContent = 'Detecting faces…';
+  // Detect faces with simple fallbacks
+  detectBtn.addEventListener('click', async()=>{
+    if(!S.image) return; const listEl=document.getElementById('facesList')||facesList; listEl.textContent='Detecting faces…';
+    try{ await loadModelsOnce(); }catch(e){ listEl.textContent='Could not load model files.'; return; }
+    const mobile = window.innerWidth < 900; let opts = new faceapi.TinyFaceDetectorOptions({ inputSize: mobile?416:608, scoreThreshold: mobile?0.3:0.25 });
+    let dets = [];
+    try{ dets = await faceapi.detectAllFaces(canvas, opts);}catch(e){ console.warn(e); }
+    if(!dets.length){ opts = new faceapi.TinyFaceDetectorOptions({ inputSize: mobile?512:768, scoreThreshold: 0.18 }); try{ dets = await faceapi.detectAllFaces(canvas, opts);}catch(e){} }
+    if(!dets.length){ try{ dets = await faceapi.detectAllFaces(S.image, opts);}catch(e){} }
+    if(!dets.length){ try{ const base=(loadModelsOnce._done && typeof loadModelsOnce._done==='string')?loadModelsOnce._done:'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/'; if(!faceapi.nets.ssdMobilenetv1 || !faceapi.nets.ssdMobilenetv1.params){ await faceapi.nets.ssdMobilenetv1.loadFromUri(base);} const ssd = new faceapi.SsdMobilenetv1Options({ minConfidence:0.2, maxResults:50 }); dets = await faceapi.detectAllFaces(canvas, ssd);}catch(e){}}
 
-    await loadModelsOnce();
-    const mobile = window.innerWidth < 900;
-    let opts = new faceapi.TinyFaceDetectorOptions({ inputSize: mobile ? 416 : 608, scoreThreshold: mobile ? 0.28 : 0.25 });
-    let dets = await faceapi.detectAllFaces(canvas, opts);
+    if(!dets.length){ listEl.textContent='No faces detected. Try better lighting/angle or use Select All and Apply to blur everything after dragging boxes (coming soon).'; S.detections=[]; drawBoxes(); return; }
 
-    if (!dets.length) {
-      facesList.textContent = 'No faces yet — retrying with higher sensitivity…';
-      opts = new faceapi.TinyFaceDetectorOptions({ inputSize: mobile ? 512 : 768, scoreThreshold: 0.18 });
-      dets = await faceapi.detectAllFaces(canvas, opts);
-    }
-
-    if (!dets.length) { try { dets = await faceapi.detectAllFaces(S.image, opts); } catch {} }
-
-    if (!dets.length) {
-      try {
-        facesList.textContent = 'Still nothing — trying alternate model…';
-        const base = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
-        if (!faceapi.nets.ssdMobilenetv1 || !faceapi.nets.ssdMobilenetv1.params) {
-          await faceapi.nets.ssdMobilenetv1.loadFromUri(base);
-        }
-        const ssdOpts = new faceapi.SsdMobilenetv1Options({ minConfidence: 0.2, maxResults: 50 });
-        dets = await faceapi.detectAllFaces(canvas, ssdOpts);
-      } catch (e) { console.warn('SSD fallback failed', e); }
-    }
-
-    if (!dets.length) { facesList.textContent = 'No faces detected. Try front-facing shots, better lighting, or rotate/zoom and retry.'; S.detections=[]; drawBoxes(); return; }
-
-    const pad = parseInt(boxPad.value || '0', 10) / 100;
-    S.detections = dets.map(d => { const { x, y, width, height } = d.box; const dx = width * pad, dy = height * pad; const bx = Math.max(0, x - dx); const by = Math.max(0, y - dy); const bw = Math.min(canvas.width - bx, width + 2*dx); const bh = Math.min(canvas.height - by, height + 2*dy); return { box:{ x:bx, y:by, w:bw, h:bh }, selected:true }; });
-
-    drawBoxes();
-    list();
+    const pad=parseInt(boxPad.value||'0',10)/100; S.detections=dets.map(d=>{ const {x,y,width,height}=d.box; const dx=width*pad, dy=height*pad; const bx=Math.max(0,x-dx), by=Math.max(0,y-dy); const bw=Math.min(canvas.width-bx,width+2*dx); const bh=Math.min(canvas.height-by,height+2*dy); return { box:{x:bx,y:by,w:bw,h:bh}, selected:true } });
+    drawBoxes(); list();
   });
 
   selectAllBtn.addEventListener('click', ()=>{ S.detections.forEach(d=>d.selected=true); drawBoxes(); list(); });
@@ -241,7 +199,7 @@
   redoBtn.addEventListener('click', ()=>{ if(!canRedo())return; try{ const next=S.redo.pop(); S.history.push(ctx.getImageData(0,0,canvas.width,canvas.height)); if(canvas.width!==next.width||canvas.height!==next.height){ canvas.width=next.width; canvas.height=next.height; overlay.width=next.width; overlay.height=next.height;} ctx.putImageData(next,0,0); drawBoxes(); }catch{} });
   barUndo.addEventListener('click', ()=>undoBtn.click()); barRedo.addEventListener('click', ()=>redoBtn.click());
 
-  function resetAll(){ if(!S.image) return; fitCanvas(S.image); S.detections=[]; facesList.textContent='Image reset. Tap Detect Faces.'; list(); refresh(); }
+  function resetAll(){ if(!S.image) return; fitCanvas(S.image); S.detections=[]; const c=document.getElementById('facesList'); if(c) c.textContent='Image reset. Tap Detect Faces.'; list(); refresh(); }
   resetBtn.addEventListener('click', resetAll); barReset.addEventListener('click', resetAll);
 
   downloadBtn.addEventListener('click', ()=>{ const a=document.createElement('a'); a.download='face-blurred.png'; a.href=canvas.toDataURL('image/png'); a.click(); });
@@ -249,7 +207,16 @@
   modeBlur.addEventListener('click', ()=>{ S.mode='blur'; modeBlur.classList.add('on'); modePix.classList.remove('on'); });
   modePix.addEventListener('click', ()=>{ S.mode='pixel'; modePix.classList.add('on'); modeBlur.classList.remove('on'); });
 
-  window.addEventListener('keydown', e=>{ const isMac=/Mac|iPhone|iPad/.test(navigator.platform); const ctrl=isMac?e.metaKey:e.ctrlKey; if(ctrl&&!e.shiftKey&&e.key.toLowerCase()==='z'){ e.preventDefault(); undoBtn.click(); } if(ctrl&&e.shiftKey&&e.key.toLowerCase()==='z'){ e.preventDefault(); redoBtn.click(); } if(e.key.toLowerCase()==='r'){ e.preventDefault(); resetBtn.click(); } });
+  // ===== Hidden Tests (web only) =====
+  function assert(name, cond){ if(!cond) throw new Error('FAIL: ' + name); console.log('PASS:', name); }
+  function runTests(){ try{
+    console.log('--- tests start ---');
+    assert('hit inside', hit(5,5,{x:0,y:0,w:10,h:10})===true);
+    assert('hit outside', hit(11,5,{x:0,y:0,w:10,h:10})===false);
+    canvas.width=20; canvas.height=20; overlay.width=20; overlay.height=20; ctx.fillStyle='#000'; ctx.fillRect(0,0,20,20); pushHistory(); ctx.fillStyle='#fff'; ctx.fillRect(0,0,5,5); assert('canUndo', canUndo()); undoBtn.click(); assert('undo applied', ctx.getImageData(0,0,1,1).data[0]===0);
+    console.log('--- tests passed ---');
+  }catch(e){ console.error(e); alert(e.message); } }
+  window.addEventListener('keydown', e=>{ const isMac=/Mac|iPhone|iPad/.test(navigator.platform); const ctrl=isMac?e.metaKey:e.ctrlKey; if(ctrl && e.altKey && e.key.toLowerCase()==='t'){ e.preventDefault(); runTests(); } });
 
   refresh();
   </script>
